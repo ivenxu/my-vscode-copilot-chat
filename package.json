@@ -125,6 +125,7 @@
 		"textSearchProvider2",
 		"chatReferenceBinaryData",
 		"languageModelSystem",
+		"chatProvider",
 		"languageModelCapabilities",
 		"inlineCompletionsAdditions",
 		"chatStatusItem",
@@ -1847,12 +1848,22 @@
 		"commands": [
 			{
 				"command": "github.copilot.dummy.signIn",
-				"title": "Sign In with Dummy Auth",
+				"title": "Sign in with Dummy",
 				"category": "Dummy Auth"
 			},
 			{
 				"command": "github.copilot.dummy.signOut",
 				"title": "Sign Out of Dummy Auth",
+				"category": "Dummy Auth"
+			},
+			{
+				"command": "github.copilot.dummy.listModels",
+				"title": "List Available Models",
+				"category": "Dummy Auth"
+			},
+			{
+				"command": "github.copilot.dummy.checkContextKey",
+				"title": "Check Context Key State",
 				"category": "Dummy Auth"
 			},
 			{
@@ -3985,6 +3996,12 @@
 			}
 		],
 		"menus": {
+			"AccountsContext": [
+				{
+					"command": "github.copilot.dummy.signIn",
+					"group": "2_dummy"
+				}
+			],
 			"editor/title": [
 				{
 					"command": "github.copilot.debug.generateInlineEditTests",

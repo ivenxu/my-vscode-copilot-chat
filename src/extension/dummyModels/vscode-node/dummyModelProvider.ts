@@ -6,6 +6,11 @@
 import * as vscode from 'vscode';
 
 /**
+ * Dummy authentication provider ID - must match the ID used in DummyAuthProvider
+ */
+const DUMMY_AUTH_PROVIDER_ID = 'my-dummy-authentication';
+
+/**
  * Dummy language model provider that returns mock responses.
  * This is for PoC purposes to test chat functionality without real AI models.
  */
@@ -14,22 +19,45 @@ export class DummyModelProvider implements vscode.LanguageModelChatProvider {
 	readonly onDidChangeLanguageModelChatInformation = this._onDidChange.event;
 
 	/**
+	 * Fire a change event to notify VS Code that model information has changed
+	 */
+	public fireChangeEvent(): void {
+		this._onDidChange.fire();
+	}
+
+	/**
 	 * Provide available dummy models
 	 */
 	async provideLanguageModelChatInformation(
 		_options: { silent: boolean },
 		_token: vscode.CancellationToken
 	): Promise<vscode.LanguageModelChatInformation[]> {
-		return [
+		console.log('[DummyModelProvider] provideLanguageModelChatInformation called');
+
+		// Check if user is authenticated with dummy auth
+		const session = await vscode.authentication.getSession(
+			DUMMY_AUTH_PROVIDER_ID,
+			[],
+			{ createIfNone: false, silent: true }
+		);
+
+		if (!session) {
+			console.log('[DummyModelProvider] No dummy auth session found - returning empty models');
+			return [];
+		}
+
+		console.log('[DummyModelProvider] Dummy auth session found - returning models');
+		const models = [
 			{
 				id: 'dummy-fast',
 				name: 'Dummy Fast Model',
 				family: 'dummy-fast',
-				tooltip: 'A fast dummy model for testing (no authentication required)',
+				tooltip: 'A fast dummy model for testing (requires dummy auth)',
 				detail: '1x',
 				maxInputTokens: 100000,
 				maxOutputTokens: 4096,
 				version: '1.0.0',
+				isUserSelectable: true,
 				capabilities: {
 					toolCalling: true
 				}
@@ -39,32 +67,36 @@ export class DummyModelProvider implements vscode.LanguageModelChatProvider {
 				id: 'dummy-smart',
 				name: 'Dummy Smart Model',
 				family: 'dummy-smart',
-				tooltip: 'A smarter dummy model for testing (no authentication required)',
+				tooltip: 'A smarter dummy model for testing (requires dummy auth)',
 				detail: '2x',
 				maxInputTokens: 200000,
 				maxOutputTokens: 8192,
 				version: '1.0.0',
+				isUserSelectable: true,
 				capabilities: {
 					toolCalling: true
 				}
-				// Note: No authProviderId - makes this model universally accessible
+				// Note: Authentication is checked in provideLanguageModelChatInformation()
 			},
 			{
 				id: 'dummy-pro',
 				name: 'Dummy Pro Model',
 				family: 'dummy-pro',
-				tooltip: 'A pro dummy model for testing (no authentication required)',
+				tooltip: 'A pro dummy model for testing (requires dummy auth)',
 				detail: '3x',
 				maxInputTokens: 300000,
 				maxOutputTokens: 16384,
 				version: '1.0.0',
+				isUserSelectable: true,
 				capabilities: {
 					toolCalling: true
 				}
-				// Note: No authProviderId - makes this model universally accessible
-				// Since authProviderId is not part of the public API, all our models are universally accessible
+				// Note: Authentication is checked in provideLanguageModelChatInformation()
+				// Models are only returned when dummy auth session exists
 			}
 		];
+		console.log('[DummyModelProvider] Returning', models.length, 'models');
+		return models;
 	}
 
 	/**

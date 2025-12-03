@@ -389,6 +389,406 @@ class StaticService {
 }
 ```
 
+## Authentication Provider Menu Integration
+
+When authentication providers are registered, VS Code automatically integrates them into the Accounts menu with configurable submenu items.
+
+### Account Submenu Structure
+
+The submenu items for each signed-in account are **hardcoded in VS Code core**, not configurable by extensions. VS Code builds these menus in `src/vs/workbench/browser/parts/globalCompositeBar.ts`:
+
+#### For Regular Authentication Providers
+
+```typescript
+// From globalCompositeBar.ts - AccountsActivityActionViewItem
+
+const providerSubMenuActions: IAction[] = [];
+
+// 1. Always present: Manage Trusted Extensions
+const manageExtensionsAction = toAction({
+	id: `configureSessions${account.label}`,
+	label: localize('manageTrustedExtensions', "Manage Trusted Extensions"),
+	enabled: true,
+	run: () => this.commandService.executeCommand(
+		'_manageTrustedExtensionsForAccount',
+		{ providerId, accountLabel: account.label }
+	)
+});
+providerSubMenuActions.push(manageExtensionsAction);
+
+// 2. Conditional: Manage Trusted MCP Servers (only if provider has authorization servers)
+const canUseMcp = !!provider.authorizationServers?.length;
+if (canUseMcp) {
+	const manageMCPAction = toAction({
+		id: `configureSessions${account.label}`,
+		label: localize('manageTrustedMCPServers', "Manage Trusted MCP Servers"),
+		enabled: true,
+		run: () => this.commandService.executeCommand(
+			'_manageTrustedMCPServersForAccount',
+			{ providerId, accountLabel: account.label }
+		)
+	});
+	providerSubMenuActions.push(manageMCPAction);
+}
+
+// 3. Conditional: Sign Out (based on account.canSignOut property)
+if (account.canSignOut) {
+	providerSubMenuActions.push(toAction({
+		id: 'signOut',
+		label: localize('signOut', "Sign Out"),
+		enabled: true,
+		run: () => this.commandService.executeCommand(
+			'_signOutOfAccount',
+			{ providerId, accountLabel: account.label }
+		)
+	}));
+}
+
+// Create submenu with account label and provider name
+const providerSubMenu = new SubmenuAction(
+	'activitybar.submenu',
+	`${account.label} (${provider.label})`,
+	providerSubMenuActions
+);
+```
+
+#### For Dynamic Authentication Providers (OAuth-based)
+
+Dynamic providers (those with `authorizationServers` configuration) have a slightly different menu:
+
+```typescript
+const providerSubMenuActions: IAction[] = [];
+
+// 1. Manage Trusted MCP Servers (always present for dynamic providers)
+const manageMCPAction = toAction({
+	id: `configureSessions${account.label}`,
+	label: localize('manageTrustedMCPServers', "Manage Trusted MCP Servers"),
+	enabled: true,
+	run: () => this.commandService.executeCommand(
+		'_manageTrustedMCPServersForAccount',
+		{ providerId, accountLabel: account.label }
+	)
+});
+providerSubMenuActions.push(manageMCPAction);
+
+// 2. Manage Dynamic Authentication Providers
+const manageDynamicAuthProvidersAction = toAction({
+	id: 'manageDynamicAuthProviders',
+	label: localize('manageDynamicAuthProviders', "Manage Dynamic Authentication Providers..."),
+	enabled: true,
+	run: () => this.commandService.executeCommand(
+		'workbench.action.removeDynamicAuthenticationProviders'
+	)
+});
+providerSubMenuActions.push(manageDynamicAuthProvidersAction);
+
+// 3. Conditional: Sign Out
+if (account.canSignOut) {
+	providerSubMenuActions.push(toAction({
+		id: 'signOut',
+		label: localize('signOut', "Sign Out"),
+		enabled: true,
+		run: () => this.commandService.executeCommand(
+			'_signOutOfAccount',
+			{ providerId, accountLabel: account.label }
+		)
+	}));
+}
+```
+
+### Menu Item Conditions
+
+**"Manage Trusted Extensions"**
+- **Always present** for regular authentication providers
+- Allows users to control which extensions have access to the account
+- Command: `_manageTrustedExtensionsForAccount`
+
+**"Manage Trusted MCP Servers"**
+- **Conditional**: Only shown if `provider.authorizationServers?.length > 0`
+- GitHub authentication provider has this because it supports OAuth authorization servers
+- Dummy providers without `authorizationServers` won't show this item
+- Command: `_manageTrustedMCPServersForAccount`
+
+**"Manage Dynamic Authentication Providers"**
+- Only for dynamic (OAuth-based) providers
+- Allows removal of dynamically registered providers
+- Command: `workbench.action.removeDynamicAuthenticationProviders`
+
+**"Sign Out"**
+- **Conditional**: Only shown if `account.canSignOut === true`
+- Some sessions may be marked as non-removable
+- Command: `_signOutOfAccount`
+
+### Key Implementation Details
+
+1. **Menu items are NOT configurable by extensions**: They are hardcoded in VS Code core
+2. **Provider type determines menu structure**: Regular vs dynamic providers get different items
+3. **Authorization servers enable MCP menu**: Setting `authorizationServers` in provider options adds the MCP menu item
+4. **Commands are built-in**: All commands (`_manageTrustedExtensionsForAccount`, etc.) are registered by VS Code core in `authentication.contribution.ts`
+
+### Example: Why GitHub Has 3 Items vs Dummy Has 2
+
+**GitHub Authentication Provider:**
+```typescript
+// GitHub provider registration (simplified)
+vscode.authentication.registerAuthenticationProvider(
+	'github',
+	'GitHub',
+	githubProvider,
+	{
+		supportsMultipleAccounts: true,
+		// This enables "Manage Trusted MCP Servers" menu item
+		supportedAuthorizationServers: [
+			{ issuer: 'https://github.com' }
+		]
+	}
+);
+```
+
+**Submenu items:**
+1. ✅ Manage Trusted Extensions (always present)
+2. ✅ Manage Trusted MCP Servers (enabled by `supportedAuthorizationServers`)
+3. ✅ Sign Out (if `account.canSignOut === true`)
+
+**Dummy Authentication Provider:**
+```typescript
+// Dummy provider registration
+vscode.authentication.registerAuthenticationProvider(
+	'my-dummy-authentication',
+	'My Dummy Auth',
+	dummyProvider,
+	{
+		supportsMultipleAccounts: false
+		// No supportedAuthorizationServers
+	}
+);
+```
+
+**Submenu items:**
+1. ✅ Manage Trusted Extensions (always present)
+2. ❌ Manage Trusted MCP Servers (not shown - no authorization servers)
+3. ✅ Sign Out (if `account.canSignOut === true`)
+
+### Extending Authentication Provider Options
+
+To add the "Manage Trusted MCP Servers" menu item to a custom provider, add authorization server configuration:
+
+```typescript
+vscode.authentication.registerAuthenticationProvider(
+	'my-custom-auth',
+	'My Custom Auth',
+	customProvider,
+	{
+		supportsMultipleAccounts: false,
+		supportedAuthorizationServers: [
+			{
+				issuer: 'https://auth.example.com',
+				// Optional additional OAuth configuration
+			}
+		]
+	}
+);
+```
+
+**Note**: The `supportedAuthorizationServers` option is part of VS Code's `AuthenticationProviderOptions` interface and is used for OAuth-based authentication flows with Model Context Protocol (MCP) integration.
+
+### Other Account Menu Items
+
+Beyond the authentication provider submenus, the Accounts menu can include additional items registered by VS Code features through the `MenuId.AccountsContext` menu contribution point.
+
+#### How Additional Menu Items Are Added
+
+Any VS Code feature or extension can contribute to the Accounts menu by registering actions with `MenuId.AccountsContext`:
+
+```typescript
+// From src/vs/workbench/contrib/userDataSync/browser/userDataSync.ts
+
+// Example: "Turn on Settings Sync" menu item
+registerAction2(class TurnOnSyncAction extends Action2 {
+	constructor() {
+		super({
+			id: 'workbench.userData.actions.turnOn',
+			title: localize('sign in and turn on', "Turn on Settings Sync..."),
+			menu: [{
+				group: '1_settings',              // Menu group for organization
+				id: MenuId.AccountsContext,       // Register to Accounts menu
+				when: contextKeyExpression,       // When clause controls visibility
+				order: 2                          // Order within the group
+			}]
+		});
+	}
+	async run(): Promise<void> {
+		// Action implementation
+	}
+});
+
+// Example: Using MenuRegistry.appendMenuItem for dynamic registration
+MenuRegistry.appendMenuItem(MenuId.AccountsContext, {
+	group: '1_settings',
+	command: {
+		id: 'workbench.userData.actions.signin',
+		title: localize('sign in accounts', "Sign in to Sync Settings (1)"),
+	},
+	when: ContextKeyExpr.and(
+		CONTEXT_SYNC_ENABLEMENT,
+		CONTEXT_ACCOUNT_STATE.isEqualTo(AccountStatus.Unavailable)
+	)
+});
+```
+
+#### Menu Building Process
+
+The Accounts menu is built in `globalCompositeBar.ts`:
+
+```typescript
+// Simplified from AccountsActivityActionViewItem.resolveMainMenuActions()
+
+protected async resolveMainMenuActions(accountsMenu: IMenu, disposables: DisposableStore): Promise<IAction[]> {
+	// 1. Get authentication providers
+	const providers = this.authenticationService.getProviderIds();
+
+	// 2. Get OTHER menu contributions (from MenuId.AccountsContext)
+	const otherCommands = accountsMenu.getActions();  // Returns all registered actions
+
+	let menus: IAction[] = [];
+
+	// 3. Build provider-specific submenus (shown earlier)
+	for (const providerId of providers) {
+		// ... create provider submenus ...
+		menus.push(providerSubMenu);
+	}
+
+	// 4. Add separator if both providers and other commands exist
+	if (menus.length && otherCommands.length) {
+		menus.push(new Separator());
+	}
+
+	// 5. Append all other registered menu items
+	otherCommands.forEach((group, i) => {
+		const actions = group[1];
+		menus = menus.concat(actions);
+		if (i !== otherCommands.length - 1) {
+			menus.push(new Separator());
+		}
+	});
+
+	return menus;
+}
+```
+
+#### Common Built-in Menu Items
+
+**Settings Sync Related** (from `userDataSync.ts`):
+- "Turn on Settings Sync..." - When sync is not enabled
+- "Turning on Settings Sync..." - During sync setup
+- "Settings Sync is On" - When sync is active (opens settings menu)
+- "Sign in to Sync Settings" - When account is needed
+
+**Extension Management** (from `extensions.contribution.ts`):
+- "Manage Extension Account Preferences" - Configure extension authentication
+
+**Edit Sessions** (from `editSessionsStorageService.ts`):
+- Cloud backup and sync settings
+
+**Remote Tunnel** (from `remoteTunnel.contribution.ts`):
+- Remote tunnel configuration items
+
+**Chat Setup** (from `chatSetupContributions.ts`):
+- Copilot chat-related account actions
+
+#### Menu Groups and Ordering
+
+Menu items are organized by groups with specific ordering:
+
+```typescript
+// Common group names in AccountsContext:
+{
+	group: '1_settings',           // Settings sync and preferences
+	group: '2_signInRequests',     // Sign-in requests from extensions
+	group: '3_accessRequests',     // Session access requests
+	group: '3_configuration',      // Configuration items
+}
+```
+
+Within each group, items are ordered by the `order` property.
+
+#### Context Keys for Visibility
+
+Menu items use context keys to control when they appear:
+
+```typescript
+// Example: Only show "Turn on Settings Sync" when sync is disabled
+when: ContextKeyExpr.and(
+	CONTEXT_SYNC_STATE.notEqualsTo(SyncStatus.Uninitialized),
+	CONTEXT_SYNC_ENABLEMENT.toNegated(),  // Sync is NOT enabled
+	CONTEXT_ACCOUNT_STATE.isEqualTo(AccountStatus.Available)
+)
+```
+
+Common context keys:
+- `CONTEXT_SYNC_ENABLEMENT` - Whether settings sync is enabled
+- `CONTEXT_ACCOUNT_STATE` - Account availability status
+- `CONTEXT_SYNC_STATE` - Current sync status
+
+#### How Extensions Can Add Menu Items
+
+Extensions can contribute to the Accounts menu through `package.json`:
+
+```json
+{
+	"contributes": {
+		"commands": [
+			{
+				"command": "myExtension.accountAction",
+				"title": "My Account Action"
+			}
+		],
+		"menus": {
+			"AccountsContext": [
+				{
+					"command": "myExtension.accountAction",
+					"group": "3_configuration",
+					"when": "config.myExtension.enabled"
+				}
+			]
+		}
+	}
+}
+```
+
+Or programmatically during activation:
+
+```typescript
+export function activate(context: vscode.ExtensionContext) {
+	// Register command
+	const command = vscode.commands.registerCommand('myExtension.accountAction', () => {
+		// Action implementation
+	});
+
+	// The menu contribution is automatic if declared in package.json
+	context.subscriptions.push(command);
+}
+```
+
+**Note**: Extensions cannot directly call `MenuRegistry.appendMenuItem` as that's internal VS Code API. They must use the `package.json` contribution point or VS Code's public extension APIs.
+
+### Summary: Complete Accounts Menu Structure
+
+```
+Accounts Menu (Activity Bar)
+├── [Provider 1 Submenu]
+│   ├── Manage Trusted Extensions (always)
+│   ├── Manage Trusted MCP Servers (if authorizationServers configured)
+│   └── Sign Out (if canSignOut === true)
+├── [Provider 2 Submenu]
+│   └── ...
+├── ─────────────────────── (separator if providers exist)
+├── Turn on Settings Sync...       (from userDataSync - group: 1_settings)
+├── Sign in to Sync Settings       (from userDataSync - group: 1_settings)
+├── Manage Extension Account...    (from extensions - group: varies)
+└── [Other registered menu items]  (from various features via MenuId.AccountsContext)
+```
+
 ## Extension Activation Architecture
 
 The Copilot Chat extension follows VS Code's standard extension activation model, with the main entry point being the `activate` function.
