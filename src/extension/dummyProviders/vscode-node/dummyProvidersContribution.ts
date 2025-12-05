@@ -5,12 +5,17 @@
 
 import * as vscode from 'vscode';
 import { IVSCodeExtensionContext } from '../../../platform/extContext/common/extensionContext';
+import { ILogService } from '../../../platform/log/common/logService';
 import { IFetcherService } from '../../../platform/networking/common/fetcherService';
+import { ITokenizerProvider } from '../../../platform/tokenizer/node/tokenizer';
 import { Disposable } from '../../../util/vs/base/common/lifecycle';
 import { IAuthorizationServerMetadata } from '../../../util/vs/base/common/oauth';
+import { IInstantiationService } from '../../../util/vs/platform/instantiation/common/instantiation';
 import { IExtensionContribution } from '../../common/contributions';
+import { CopilotLanguageModelWrapper } from '../../conversation/vscode-node/languageModelAccess';
 import { IOAuth2Config, OAuth2Service } from '../../dummyAuth/common/oauth2Service';
 import { DummyAuthProvider } from '../../dummyAuth/vscode-node/dummyAuthProvider';
+import { Qwen3ChatEndpoint } from '../../dummyAuth/vscode-node/qwen3Endpoint';
 import { DummyModelProvider } from '../../dummyModels/vscode-node/dummyModelProvider';
 
 // Context key for tracking dummy auth sign-in state
@@ -28,7 +33,10 @@ export class DummyProvidersContribution extends Disposable implements IExtension
 
 	constructor(
 		@IFetcherService private readonly fetcherService: IFetcherService,
-		@IVSCodeExtensionContext private readonly context: IVSCodeExtensionContext
+		@IVSCodeExtensionContext private readonly context: IVSCodeExtensionContext,
+		@ITokenizerProvider private readonly tokenizerProvider: ITokenizerProvider,
+		@ILogService private readonly logService: ILogService,
+		@IInstantiationService private readonly instantiationService: IInstantiationService
 	) {
 		super();
 
@@ -91,11 +99,7 @@ export class DummyProvidersContribution extends Disposable implements IExtension
 		this._register(
 			vscode.authentication.onDidChangeSessions(async (e: vscode.AuthenticationSessionsChangeEvent) => {
 				if (e.provider.id === 'my-dummy-authentication') {
-					console.log('[DummyProviders] Session change event:', {
-						added: e.added?.length ?? 0,
-						removed: e.removed?.length ?? 0,
-						changed: e.changed?.length ?? 0
-					});
+					console.log('[DummyProviders] Session change event for provider:', e.provider.id);
 
 					// Check current session state
 					const sessions = await vscode.authentication.getSession(
@@ -132,8 +136,30 @@ export class DummyProvidersContribution extends Disposable implements IExtension
 		requestSessionAccess();
 		console.log('[DummyProviders] Session access requested - menu item should appear in Accounts menu');
 
+		// Create Qwen3 endpoint if configured
+		let qwen3Endpoint: Qwen3ChatEndpoint | undefined;
+		let lmWrapper: CopilotLanguageModelWrapper | undefined;
+
+		const qwen3ApiKey = process.env.QWEN3_API_KEY;
+		const qwen3BaseUrl = process.env.QWEN3_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1';
+
+		if (qwen3ApiKey) {
+			console.log('[DummyProviders] Qwen3 API key found, creating Qwen3ChatEndpoint');
+			qwen3Endpoint = new Qwen3ChatEndpoint(
+				qwen3ApiKey,
+				qwen3BaseUrl,
+				this.tokenizerProvider,
+				this.fetcherService,
+				this.logService
+			);
+			lmWrapper = this.instantiationService.createInstance(CopilotLanguageModelWrapper);
+			console.log('[DummyProviders] Qwen3ChatEndpoint and CopilotLanguageModelWrapper created');
+		} else {
+			console.log('[DummyProviders] QWEN3_API_KEY not found - qwen3-coder-plus model will not be available');
+		}
+
 		// Register language model provider
-		this.modelProvider = new DummyModelProvider();
+		this.modelProvider = new DummyModelProvider(qwen3Endpoint, lmWrapper);
 		console.log('[DummyProviders] Created DummyModelProvider');
 		this._register(
 			vscode.lm.registerLanguageModelChatProvider('dummy', this.modelProvider)

@@ -4,6 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
+import { IChatEndpoint } from '../../../platform/networking/common/networking';
+import { CopilotLanguageModelWrapper } from '../../conversation/vscode-node/languageModelAccess';
 
 /**
  * Dummy authentication provider ID - must match the ID used in DummyAuthProvider
@@ -17,6 +19,11 @@ const DUMMY_AUTH_PROVIDER_ID = 'my-dummy-authentication';
 export class DummyModelProvider implements vscode.LanguageModelChatProvider {
 	private readonly _onDidChange = new vscode.EventEmitter<void>();
 	readonly onDidChangeLanguageModelChatInformation = this._onDidChange.event;
+
+	constructor(
+		private readonly qwen3Endpoint: IChatEndpoint | undefined,
+		private readonly lmWrapper: CopilotLanguageModelWrapper | undefined
+	) { }
 
 	/**
 	 * Fire a change event to notify VS Code that model information has changed
@@ -47,7 +54,7 @@ export class DummyModelProvider implements vscode.LanguageModelChatProvider {
 		}
 
 		console.log('[DummyModelProvider] Dummy auth session found - returning models');
-		const models = [
+		const models: vscode.LanguageModelChatInformation[] = [
 			{
 				id: 'dummy-fast',
 				name: 'Dummy Fast Model',
@@ -78,24 +85,29 @@ export class DummyModelProvider implements vscode.LanguageModelChatProvider {
 				}
 				// Note: Authentication is checked in provideLanguageModelChatInformation()
 			},
-			{
-				id: 'dummy-pro',
-				name: 'Dummy Pro Model',
-				family: 'dummy-pro',
-				tooltip: 'A pro dummy model for testing (requires dummy auth)',
-				detail: '3x',
-				maxInputTokens: 300000,
-				maxOutputTokens: 16384,
+		];
+
+		// Add Qwen3 Coder model if endpoint is configured
+		if (this.qwen3Endpoint) {
+			console.log('[DummyModelProvider] Adding Qwen3 Coder model to list');
+			models.push({
+				id: 'qwen3-coder-plus',
+				name: 'Qwen3 Coder',
+				family: 'qwen3',
+				tooltip: 'Real Qwen3 Coder LLM (OpenAI-compatible API)',
+				detail: 'Real LLM',
+				maxInputTokens: this.qwen3Endpoint.modelMaxPromptTokens,
+				maxOutputTokens: this.qwen3Endpoint.maxOutputTokens,
 				version: '1.0.0',
 				isUserSelectable: true,
 				capabilities: {
-					toolCalling: true
+					toolCalling: this.qwen3Endpoint.supportsToolCalls
 				}
-				// Note: Authentication is checked in provideLanguageModelChatInformation()
-				// Models are only returned when dummy auth session exists
-			}
-		];
-		console.log('[DummyModelProvider] Returning', models.length, 'models');
+			});
+		} else {
+			console.log('[DummyModelProvider] Qwen3 endpoint NOT configured - model will not be available');
+		}
+		console.log('[DummyModelProvider] Returning', models.length, 'models:', models.map(m => m.id).join(', '));
 		return models;
 	}
 
@@ -105,10 +117,30 @@ export class DummyModelProvider implements vscode.LanguageModelChatProvider {
 	async provideLanguageModelChatResponse(
 		model: vscode.LanguageModelChatInformation,
 		messages: vscode.LanguageModelChatMessage[],
-		_options: vscode.ProvideLanguageModelChatResponseOptions,
+		options: vscode.ProvideLanguageModelChatResponseOptions,
 		progress: vscode.Progress<vscode.LanguageModelResponsePart>,
 		token: vscode.CancellationToken
 	): Promise<void> {
+		console.log('[DummyModelProvider] provideLanguageModelChatResponse called with model:', model.id);
+		console.log('[DummyModelProvider] qwen3Endpoint available:', !!this.qwen3Endpoint);
+		console.log('[DummyModelProvider] lmWrapper available:', !!this.lmWrapper);
+
+		// Use real Qwen3 LLM for qwen3-coder-plus model
+		if (model.id === 'qwen3-coder-plus' && this.qwen3Endpoint && this.lmWrapper) {
+			console.log('[DummyModelProvider] Using real Qwen3 LLM for qwen3-coder-plus');
+			return this.lmWrapper.provideLanguageModelResponse(
+				this.qwen3Endpoint,
+				messages,
+				options,
+				'GitHub.copilot-chat', // extensionId - must be the actual extension ID from package.json
+				progress,
+				token
+			);
+		}
+
+		console.log('[DummyModelProvider] Using dummy response for model:', model.id);
+
+		// For other models, use dummy responses
 		// Check for cancellation
 		if (token.isCancellationRequested) {
 			return;
