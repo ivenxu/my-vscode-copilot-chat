@@ -9,7 +9,7 @@ import { Source } from '../../../platform/chat/common/chatMLFetcher';
 import { ChatFetchResponseType, ChatLocation, ChatResponse } from '../../../platform/chat/common/commonTypes';
 import { EndpointEditToolName } from '../../../platform/endpoint/common/endpointProvider';
 import { ILogService } from '../../../platform/log/common/logService';
-import { FinishedCallback, OptionalChatRequestParams } from '../../../platform/networking/common/fetch';
+import { FinishedCallback, ICopilotToolCall, IResponseDelta, OptionalChatRequestParams } from '../../../platform/networking/common/fetch';
 import { IFetcherService, Response } from '../../../platform/networking/common/fetcherService';
 import { IChatEndpoint, ICreateEndpointBodyOptions, IEndpointBody, IMakeChatRequestOptions } from '../../../platform/networking/common/networking';
 import { ChatCompletion, rawMessageToCAPI } from '../../../platform/networking/common/openai';
@@ -100,6 +100,9 @@ export class Qwen3ChatEndpoint implements IChatEndpoint {
 			Object.assign(request, options.postOptions);
 		}
 
+		// Log the request body to debug tool calling
+		this.logService.debug(`[Qwen3ChatEndpoint] Request body: ${JSON.stringify(request, null, 2)}`);
+
 		return request;
 	}
 
@@ -168,12 +171,31 @@ export class Qwen3ChatEndpoint implements IChatEndpoint {
 				const responseText = await response.text();
 				const jsonResponse = JSON.parse(responseText);
 
-				// Extract the assistant message
-				const assistantMessage = jsonResponse?.choices?.[0]?.message?.content || '';
+				// Log the full response for debugging
+				this.logService.debug(`[Qwen3ChatEndpoint] Response: ${JSON.stringify(jsonResponse, null, 2)}`);
 
-				// Call the finish callback with the text
+				// Extract the assistant message (OpenAI format)
+				const choice = jsonResponse?.choices?.[0];
+				const message = choice?.message;
+				const assistantMessage = message?.content || '';
+				const toolCalls = message?.tool_calls;
+
+				// Prepare the response delta
+				const delta: IResponseDelta = { text: assistantMessage };
+
+				// Convert OpenAI tool_calls format to Copilot's copilotToolCalls format
+				if (toolCalls && Array.isArray(toolCalls)) {
+					delta.copilotToolCalls = toolCalls.map((tc: { id: string; function?: { name?: string; arguments?: string } }): ICopilotToolCall => ({
+						id: tc.id,
+						name: tc.function?.name || '',
+						arguments: tc.function?.arguments || '{}',
+					}));
+					this.logService.debug(`[Qwen3ChatEndpoint] Converted ${toolCalls.length} tool calls to copilotToolCalls format`);
+				}
+
+				// Call the finish callback with the complete delta
 				if (options.finishedCb) {
-					await options.finishedCb(assistantMessage, 0, { text: assistantMessage });
+					await options.finishedCb(assistantMessage, 0, delta);
 				}
 
 				return {
